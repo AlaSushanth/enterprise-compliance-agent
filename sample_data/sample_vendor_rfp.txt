@@ -1,0 +1,49 @@
+================================================================================
+ENTERPRISE CLOUD SERVICE LEVEL AGREEMENT & RFP MASTER TERMS
+CLIENT: Global Financial Holdings Corp. (JPMorgan Tier-1 Partner)
+VENDOR: Cognizant Technology Services Pod
+DOCUMENT ID: RFP-SEC-2026-V4
+================================================================================
+
+--- Page 1 ---
+SECTION 1: INTRODUCTION AND SCOPE OF WORK
+This Request for Proposal (RFP) governs the cloud-native development, algorithmic trading integration, 
+and managed agentic workflows provided by Vendor to Client. Vendor agrees to adhere to the strictest 
+industry security, data protection, and operational continuity benchmarks.
+
+SECTION 2: DATA SECURITY, ACCESS CONTROLS & ENCRYPTION
+2.1 All non-public client financial records and personal identifiers must be protected in transit 
+using TLS 1.3 encryption protocols and at rest using AES-256 bit encryption keys managed via dedicated 
+Hardware Security Modules (HSM) with customer-managed keys (CMK).
+2.2 Vendor shall enforce Multi-Factor Authentication (MFA) across all administrative access endpoints 
+and implement automated secret rotation every ninety (90) days.
+
+--- Page 2 ---
+SECTION 3: SERVICE LEVEL AGREEMENTS (SLA) & AVAILABILITY
+3.1 Vendor warrants that the core trading and transaction execution services shall maintain an uptime 
+availability of not less than 99.98% per calendar month, twenty-four (24) hours per day, seven (7) days per week.
+3.2 In the event of service degradation or unplanned outage exceeding ten (10) consecutive minutes, 
+Vendor shall credit Client 50% of the entire quarterly billing as liquidated damages.
+
+SECTION 4: DATA RESIDENCY AND CROSS-BORDER GOVERNANCE
+4.1 Client personal identifying information (PII) must strictly reside within the borders of the European Union 
+(Frankfurt AWS region). Any cross-border data transfer or foreign remote administration is prohibited 
+without prior written authorization under Standard Contractual Clauses (SCC) and GDPR Article 28.
+
+--- Page 3 ---
+SECTION 5: INDEMNIFICATION, LIABILITY AND FINANCIAL PENALTIES
+5.1 Vendor shall provide unlimited liability and indemnification for any security incident, 
+confidentiality breach, or operational disruption arising from Vendor software defects.
+5.2 In addition to direct damages, Vendor agrees to liquidated damages of $1,000,000 USD for any single 
+data breach involving more than one thousand (1,000) customer records.
+
+SECTION 6: DISASTER RECOVERY AND BUSINESS CONTINUITY
+6.1 Vendor shall maintain automated multi-region active-active failover capabilities ensuring a 
+Recovery Point Objective (RPO) of less than 5 minutes and a Recovery Time Objective (RTO) of less than 1 hour.
+6.2 Vendor shall conduct simulated disaster recovery exercises twice per calendar year and provide auditable 
+SOC-2 Type II audit reports to Client within fifteen (15) days of completion.
+
+SECTION 7: TERMINATION AND GOVERNANCE
+7.1 Client reserves the right to terminate this agreement for convenience upon thirty (30) days written notice.
+7.2 Upon termination, Vendor shall immediately purge all client data and provide cryptographic erasure certificates.
+================================================================================

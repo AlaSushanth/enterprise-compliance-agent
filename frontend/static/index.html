@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AEGIS-OPERATOR | Enterprise Multi-Agent Compliance Engine</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel Standalone for in-browser JSX parsing -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased flex flex-col selection:bg-indigo-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function App() {
+      const [documentId, setDocumentId] = useState(null);
+      const [filename, setFilename] = useState("");
+      const [docText, setDocText] = useState("");
+      const [totalPages, setTotalPages] = useState(1);
+      const [isUploading, setIsUploading] = useState(false);
+      const [isRunning, setIsRunning] = useState(false);
+      
+      const [currentAgent, setCurrentAgent] = useState("Idle");
+      const [stepHistory, setStepHistory] = useState([]);
+      const [pendingDecisions, setPendingDecisions] = useState([]);
+      const [humanChoices, setHumanChoices] = useState({});
+      const [finalReport, setFinalReport] = useState(null);
+      const [telemetry, setTelemetry] = useState(null);
+      const [globalMetrics, setGlobalMetrics] = useState(null);
+
+      // Fetch global metrics periodically
+      useEffect(() => {
+        fetchMetrics();
+      }, []);
+
+      const fetchMetrics = async () => {
+        try {
+          const res = await fetch("/api/telemetry");
+          if (res.ok) {
+            const data = await res.json();
+            setGlobalMetrics(data);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      };
+
+      const loadSampleRFP = async () => {
+        try {
+          setIsUploading(true);
+          const res = await fetch("/api/sample");
+          const data = await res.json();
+          setDocText(data.content);
+          setFilename("sample_vendor_rfp.txt");
+          
+          // Auto-upload sample
+          const formData = new FormData();
+          formData.append("text_content", data.content);
+          formData.append("filename", "JPMorgan_Partner_RFP_2026.txt");
+
+          const upRes = await fetch("/api/upload", {
+            method: "POST",
+            body: formData
+          });
+          const upData = await upRes.json();
+          setDocumentId(upData.document_id);
+          setTotalPages(upData.total_pages);
+          setFilename(upData.filename);
+          setIsUploading(false);
+          // Reset previous states
+          setStepHistory([]);
+          setPendingDecisions([]);
+          setFinalReport(null);
+          setCurrentAgent("Ready to Audit");
+        } catch (err) {
+          alert("Error loading sample: " + err.message);
+          setIsUploading(false);
+        }
+      };
+
+      const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("filename", file.name);
+
+        try {
+          const res = await fetch("/api/upload", {
+            method: "POST",
+            body: formData
+          });
+          const data = await res.json();
+          setDocumentId(data.document_id);
+          setFilename(data.filename);
+          setTotalPages(data.total_pages);
+          setIsUploading(false);
+          setFinalReport(null);
+          setStepHistory([]);
+          setPendingDecisions([]);
+          setCurrentAgent("Ready to Audit");
+        } catch (err) {
+          alert("Upload failed: " + err.message);
+          setIsUploading(false);
+        }
+      };
+
+      const runAuditPipeline = async () => {
+        if (!documentId) return;
+        setIsRunning(true);
+        setCurrentAgent("LangGraph Supervisor Initializing...");
+
+        try {
+          const res = await fetch(`/api/run-audit/${documentId}`, {
+            method: "POST"
+          });
+          const data = await res.json();
+          setCurrentAgent(data.current_agent);
+          setStepHistory(data.step_history || []);
+          setPendingDecisions(data.pending_decisions || []);
+          setTelemetry(data.telemetry);
+          fetchMetrics();
+
+          if (data.final_report) {
+            setFinalReport(data.final_report);
+          }
+          setIsRunning(false);
+        } catch (err) {
+          alert("Pipeline execution failed: " + err.message);
+          setIsRunning(false);
+        }
+      };
+
+      const handleDecisionSelect = (clauseId, choice) => {
+        setHumanChoices(prev => ({
+          ...prev,
+          [clauseId]: { decision: choice, note: "Reviewed via Enterprise Review Gate" }
+        }));
+      };
+
+      const submitHumanDecisions = async () => {
+        if (!documentId) return;
+        setIsRunning(true);
+        try {
+          const payload = {
+            document_id: documentId,
+            decisions: humanChoices
+          };
+          const res = await fetch("/api/human-decision", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          setCurrentAgent(data.current_agent);
+          setStepHistory(data.step_history || []);
+          setPendingDecisions([]);
+          setFinalReport(data.final_report);
+          setTelemetry(data.telemetry);
+          fetchMetrics();
+          setIsRunning(false);
+        } catch (err) {
+          alert("Failed to record human review: " + err.message);
+          setIsRunning(false);
+        }
+      };
+
+      return (
+        <div className="flex flex-col min-h-screen">
+          {/* Top Bar Header */}
+          <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-6 py-4 flex flex-wrap justify-between items-center sticky top-0 z-50">
+            <div className="flex items-center space-x-3">
+              <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 font-bold text-lg text-white">
+                🛡️
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h1 className="text-lg font-bold text-white tracking-wide">AEGIS-OPERATOR</h1>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 font-mono">v1.0.0</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 font-medium">Enterprise Pod</span>
+                </div>
+                <p className="text-xs text-slate-400">Autonomous Compliance & RFP Due Diligence Engine with LangGraph</p>
+              </div>
+            </div>
+
+            {/* Live LLMOps Telemetry Bar */}
+            <div className="flex items-center space-x-4 text-xs font-mono mt-3 sm:mt-0">
+              <div className="bg-slate-800/80 border border-slate-700/60 rounded-lg px-3 py-1.5 flex items-center space-x-2">
+                <span className="text-slate-400">STATUS:</span>
+                <span className="text-emerald-400 flex items-center">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span>
+                  LangGraph Active
+                </span>
+              </div>
+              <div className="bg-slate-800/80 border border-slate-700/60 rounded-lg px-3 py-1.5 flex items-center space-x-2">
+                <span className="text-slate-400">LATENCY:</span>
+                <span className="text-indigo-300">{telemetry ? `${telemetry.total_latency_ms} ms` : "0.0 ms"}</span>
+              </div>
+              <div className="bg-slate-800/80 border border-slate-700/60 rounded-lg px-3 py-1.5 flex items-center space-x-2">
+                <span className="text-slate-400">EST. COST:</span>
+                <span className="text-amber-400">{telemetry ? `$${telemetry.total_cost_usd}` : "$0.0000"}</span>
+              </div>
+            </div>
+          </header>
+
+          {/* Main Content Area */}
+          <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            {/* Left Column: Document Ingestion & Quick Testing (4 cols) */}
+            <div className="lg:col-span-4 space-y-6">
+              
+              {/* Upload Card */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center">
+                  <span className="mr-2">📄</span> 1. Ingest RFP / Contract
+                </h2>
+                
+                <div className="border-2 border-dashed border-slate-700 hover:border-indigo-500/60 transition-colors rounded-xl p-5 text-center cursor-pointer bg-slate-950/40">
+                  <input 
+                    type="file" 
+                    id="fileUpload" 
+                    className="hidden" 
+                    accept=".pdf,.txt,.doc,.docx"
+                    onChange={handleFileUpload}
+                  />
+                  <label htmlFor="fileUpload" className="cursor-pointer flex flex-col items-center">
+                    <span className="text-3xl mb-2">📥</span>
+                    <span className="text-sm font-medium text-slate-200">Upload PDF or Agreement</span>
+                    <span className="text-xs text-slate-500 mt-1">Supports PDF, TXT, Markdown</span>
+                  </label>
+                </div>
+
+                <div className="relative my-4 text-center">
+                  <span className="bg-slate-900 px-3 text-xs text-slate-500 relative z-10 uppercase tracking-widest">or quick demo</span>
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-800"></div></div>
+                </div>
+
+                <button
+                  onClick={loadSampleRFP}
+                  disabled={isUploading}
+                  className="w-full bg-slate-800 hover:bg-slate-700/80 text-indigo-300 border border-indigo-500/30 rounded-xl py-2.5 px-4 text-xs font-semibold flex items-center justify-center space-x-2 transition shadow-sm"
+                >
+                  <span>⚡</span>
+                  <span>{isUploading ? "Loading Benchmark..." : "Load Tier-1 Bank RFP Sample"}</span>
+                </button>
+
+                {documentId && (
+                  <div className="mt-4 p-3 bg-indigo-950/30 border border-indigo-500/20 rounded-xl text-xs space-y-1">
+                    <div className="flex justify-between font-mono">
+                      <span className="text-slate-400">File:</span>
+                      <span className="text-indigo-200 truncate max-w-[180px] font-medium">{filename}</span>
+                    </div>
+                    <div className="flex justify-between font-mono">
+                      <span className="text-slate-400">Pages Grounded:</span>
+                      <span className="text-emerald-400 font-bold">{totalPages} Pages</span>
+                    </div>
+                    <div className="flex justify-between font-mono">
+                      <span className="text-slate-400">Doc Ref ID:</span>
+                      <span className="text-slate-300">{documentId}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Execution Trigger Card */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center">
+                  <span className="mr-2">⚙️</span> 2. Orchestration Pod
+                </h2>
+                
+                <button
+                  onClick={runAuditPipeline}
+                  disabled={!documentId || isRunning}
+                  className={`w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center space-x-2 transition shadow-lg ${
+                    !documentId || isRunning
+                      ? "bg-slate-800 text-slate-500 cursor-not-allowed"
+                      : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30 active:scale-[0.98]"
+                  }`}
+                >
+                  {isRunning ? (
+                    <>
+                      <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Agents Collaborating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>🚀</span>
+                      <span>Run Multi-Agent Audit Pod</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Agent Activity Timeline */}
+                <div className="mt-4 space-y-2">
+                  <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Agent Execution Traces:</span>
+                  <div className="space-y-2 max-h-56 overflow-y-auto custom-scrollbar pr-1">
+                    {stepHistory.length === 0 ? (
+                      <div className="text-xs text-slate-600 italic py-2">No agents dispatched yet.</div>
+                    ) : (
+                      stepHistory.map((step, idx) => (
+                        <div key={idx} className="bg-slate-950/60 border border-slate-800 rounded-lg p-2.5 text-xs">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-semibold text-indigo-400 font-mono flex items-center">
+                              <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 mr-1.5"></span>
+                              {step.agent}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">{step.latency_ms}ms</span>
+                          </div>
+                          <p className="text-slate-300 text-[11px] leading-relaxed">{step.summary}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* LLMOps Metrics Summary */}
+              {globalMetrics && (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl text-xs space-y-2 font-mono">
+                  <h3 className="font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center">
+                    <span className="mr-2">📈</span> LLMOps Governance
+                  </h3>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Audit Compliance Rate:</span>
+                    <span className="text-emerald-400 font-bold">{globalMetrics.guardrail_compliance_rate}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Total Tokens Consumed:</span>
+                    <span className="text-slate-200">{globalMetrics.total_tokens_consumed.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Average Agent Latency:</span>
+                    <span className="text-slate-200">{globalMetrics.avg_latency_ms} ms</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right Column: Multi-Agent Findings, Human Gate & Final Report (8 cols) */}
+            <div className="lg:col-span-8 space-y-6">
+              
+              {/* Human-in-the-Loop Review Gate Card (Appears dynamically if risks detected!) */}
+              {pendingDecisions.length > 0 && (
+                <div className="bg-gradient-to-br from-amber-950/40 via-slate-900 to-slate-900 border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl animate-fade-in">
+                  <div className="flex items-center space-x-3 mb-4">
+                    <div className="h-9 w-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 text-lg">
+                      ⚠️
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-amber-300">Human-in-the-Loop Approval Gate Triggered</h3>
+                      <p className="text-xs text-amber-200/70">
+                        The Risk Auditor Agent detected high-liability enterprise covenants requiring authorized review before signing.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 my-4">
+                    {pendingDecisions.map((dec) => (
+                      <div key={dec.clause_id} className="bg-slate-950/80 border border-amber-500/30 rounded-xl p-4 text-xs space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                            {dec.clause_id} • Page {dec.page_number}
+                          </span>
+                          <span className="font-mono text-rose-400 font-semibold px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20">
+                            {dec.risk_level} RISK
+                          </span>
+                        </div>
+                        
+                        <p className="text-slate-200 font-mono text-[11px] bg-slate-900/90 p-2.5 rounded border border-slate-800">
+                          "{dec.original_text}"
+                        </p>
+                        
+                        <div className="text-slate-400 text-[11px]">
+                          <strong className="text-amber-300">Auditor Finding:</strong> {dec.explanation}
+                        </div>
+                        <div className="text-slate-400 text-[11px]">
+                          <strong className="text-emerald-400">Recommended Resolution:</strong> {dec.recommended_action}
+                        </div>
+
+                        {/* Decision Buttons */}
+                        <div className="pt-2 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleDecisionSelect(dec.clause_id, "ACCEPT_RECOMMENDATION")}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                              humanChoices[dec.clause_id]?.decision === "ACCEPT_RECOMMENDATION"
+                                ? "bg-emerald-600 text-white ring-2 ring-emerald-400"
+                                : "bg-slate-800 text-emerald-300 hover:bg-slate-700 border border-emerald-500/30"
+                            }`}
+                          >
+                            ✓ Counter-Offer with Liability Cap
+                          </button>
+                          <button
+                            onClick={() => handleDecisionSelect(dec.clause_id, "OVERRIDE_AND_ACCEPT_RISK")}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                              humanChoices[dec.clause_id]?.decision === "OVERRIDE_AND_ACCEPT_RISK"
+                                ? "bg-amber-600 text-white ring-2 ring-amber-400"
+                                : "bg-slate-800 text-amber-300 hover:bg-slate-700 border border-amber-500/30"
+                            }`}
+                          >
+                            ⚠️ Accept Risk (Executive Override)
+                          </button>
+                          <button
+                            onClick={() => handleDecisionSelect(dec.clause_id, "REJECT_CLAUSE_ENTIRELY")}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                              humanChoices[dec.clause_id]?.decision === "REJECT_CLAUSE_ENTIRELY"
+                                ? "bg-rose-600 text-white ring-2 ring-rose-400"
+                                : "bg-slate-800 text-rose-300 hover:bg-slate-700 border border-rose-500/30"
+                            }`}
+                          >
+                            ✕ Reject Clause Entirely
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={submitHumanDecisions}
+                    disabled={Object.keys(humanChoices).length < pendingDecisions.length || isRunning}
+                    className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs uppercase tracking-wider transition ${
+                      Object.keys(humanChoices).length < pendingDecisions.length || isRunning
+                        ? "bg-slate-800 text-slate-500 cursor-not-allowed"
+                        : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30"
+                    }`}
+                  >
+                    Confirm Decisions & Synthesize Executive Report
+                  </button>
+                </div>
+              )}
+
+              {/* Final Executive Brief & Itemized Findings */}
+              {finalReport ? (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-6">
+                  
+                  {/* Executive Header */}
+                  <div className="flex flex-wrap justify-between items-start gap-4 pb-4 border-b border-slate-800">
+                    <div>
+                      <span className="text-xs font-mono text-indigo-400 uppercase tracking-widest">Executive Audit Brief</span>
+                      <h2 className="text-xl font-bold text-white mt-1">{finalReport.document_name}</h2>
+                      <div className="flex items-center space-x-2 mt-2">
+                        <span className="text-xs px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+                          Readiness: {finalReport.overall_readiness_score}
+                        </span>
+                        <span className="text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 font-mono border border-slate-700">
+                          Verdict: {finalReport.risk_verdict}
+                        </span>
+                      </div>
+                    </div>
+
+                    <a
+                      href={`/api/export-report/${documentId}`}
+                      target="_blank"
+                      className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 px-4 rounded-xl transition flex items-center space-x-2 shadow-md shadow-indigo-600/20"
+                    >
+                      <span>📥</span>
+                      <span>Export Audit Markdown</span>
+                    </a>
+                  </div>
+
+                  {/* Summary Metric Counters */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 text-center">
+                      <div className="text-2xl font-bold text-white">{finalReport.metrics.total_requirements_analyzed}</div>
+                      <div className="text-[11px] text-slate-400 uppercase tracking-wider mt-1">Covenants Found</div>
+                    </div>
+                    <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 text-center">
+                      <div className="text-2xl font-bold text-emerald-400">{finalReport.metrics.compliant}</div>
+                      <div className="text-[11px] text-slate-400 uppercase tracking-wider mt-1">Compliant</div>
+                    </div>
+                    <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 text-center">
+                      <div className="text-2xl font-bold text-rose-400">{finalReport.metrics.critical_risks}</div>
+                      <div className="text-[11px] text-slate-400 uppercase tracking-wider mt-1">Critical Traps</div>
+                    </div>
+                    <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 text-center">
+                      <div className="text-2xl font-bold text-amber-400">{finalReport.metrics.high_risks}</div>
+                      <div className="text-[11px] text-slate-400 uppercase tracking-wider mt-1">High Risks</div>
+                    </div>
+                  </div>
+
+                  {/* Itemized Table */}
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3 flex items-center">
+                      <span className="mr-2">🔍</span> Itemized Compliance Findings & Grounded Citations
+                    </h3>
+                    <div className="overflow-x-auto rounded-xl border border-slate-800">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-mono">
+                            <th className="p-3">Ref & Page</th>
+                            <th className="p-3">Category</th>
+                            <th className="p-3">Original Requirement</th>
+                            <th className="p-3">Risk Level</th>
+                            <th className="p-3">Policy Match</th>
+                            <th className="p-3">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800 bg-slate-900/60">
+                          {finalReport.itemized_clauses.map((clause, idx) => (
+                            <tr key={idx} className="hover:bg-slate-800/40 transition">
+                              <td className="p-3 font-mono font-bold text-indigo-300 whitespace-nowrap">
+                                <div>{clause.clause_id}</div>
+                                <div className="text-[10px] text-slate-500 font-normal">Page {clause.page_number}</div>
+                              </td>
+                              <td className="p-3 text-slate-300 whitespace-nowrap font-medium">{clause.category}</td>
+                              <td className="p-3 text-slate-300 text-[11px] max-w-xs">{clause.original_text}</td>
+                              <td className="p-3 whitespace-nowrap">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                                  clause.risk_level === 'CRITICAL' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' :
+                                  clause.risk_level === 'HIGH' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                                  clause.risk_level === 'ACCEPTED_RISK' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' :
+                                  'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                }`}>
+                                  {clause.risk_level}
+                                </span>
+                              </td>
+                              <td className="p-3 text-[11px] text-slate-400 font-mono">{clause.policy_reference}</td>
+                              <td className="p-3 text-[11px] text-slate-300">{clause.recommended_action}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                </div>
+              ) : (
+                /* Empty / Waiting Placeholder */
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center shadow-xl flex flex-col items-center justify-center min-h-[400px]">
+                  <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-3xl mb-4 text-indigo-400">
+                    📂
+                  </div>
+                  <h3 className="text-base font-bold text-white">Awaiting Document Audit</h3>
+                  <p className="text-xs text-slate-400 max-w-sm mt-2 leading-relaxed">
+                    Upload an enterprise vendor RFP or click <strong className="text-indigo-300">"Load Tier-1 Bank RFP Sample"</strong> to trigger the multi-agent pod and inspect live risk auditing.
+                  </p>
+                </div>
+              )}
+
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  aegis-operator:
+    build: .
+    container_name: aegis_compliance_pod
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
