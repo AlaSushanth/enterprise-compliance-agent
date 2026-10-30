@@ -1,8 +1,7 @@
 import os
 import uuid
-import json
-from typing import Dict, Any, List
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
 from backend.app.config import settings
@@ -14,8 +13,12 @@ from backend.app.core.telemetry import telemetry_engine
 
 router = APIRouter()
 
-# In-memory document & state store
+# Global session cache
 SESSION_STATES: Dict[str, AgentState] = {}
+
+class TextIngestPayload(BaseModel):
+    filename: Optional[str] = "vendor_contract.txt"
+    content: str
 
 class HumanDecisionPayload(BaseModel):
     document_id: str
@@ -26,11 +29,12 @@ def health_check():
     return {
         "status": "healthy",
         "service": settings.PROJECT_NAME,
-        "version": settings.VERSION
+        "version": settings.VERSION,
+        "engine": "LangGraph + Hybrid RAG"
     }
 
 @router.get("/sample")
-def get_sample_document():
+def get_sample():
     sample_path = os.path.join(settings.SAMPLE_DIR, "sample_vendor_rfp.txt")
     if not os.path.exists(sample_path):
         raise HTTPException(status_code=404, detail="Sample RFP document not found")
@@ -44,30 +48,22 @@ def get_sample_document():
         "total_characters": len(content)
     }
 
-@router.post("/upload")
-async def upload_document(
-    file: UploadFile = File(None),
-    text_content: str = Form(None),
-    filename: str = Form("uploaded_rfp.txt")
-):
+@router.post("/ingest-text")
+def ingest_text_document(payload: TextIngestPayload):
+    """
+    Direct JSON ingestion endpoint - reliable and fast without multipart overhead.
+    """
     doc_id = f"doc_{uuid.uuid4().hex[:8]}"
-    saved_path = os.path.join(settings.UPLOAD_DIR, f"{doc_id}_{filename}")
+    saved_path = os.path.join(settings.UPLOAD_DIR, f"{doc_id}_{payload.filename}")
 
-    if file:
-        with open(saved_path, "wb") as f:
-            f.write(await file.read())
-        parsed_chunks = DocumentParser.parse_file(saved_path)
-    elif text_content:
-        with open(saved_path, "w", encoding="utf-8") as f:
-            f.write(text_content)
-        parsed_chunks = DocumentParser.parse_file(saved_path)
-    else:
-        raise HTTPException(status_code=400, detail="Must provide either a file upload or text content.")
+    with open(saved_path, "w", encoding="utf-8") as f:
+        f.write(payload.content)
 
+    parsed_chunks = DocumentParser.parse_file(saved_path)
     if not parsed_chunks:
-        raise HTTPException(status_code=400, detail="Could not extract readable text from document.")
+        raise HTTPException(status_code=400, detail="Could not parse text chunks.")
 
-    # Index document chunks into Vector Store for page-grounded retrieval
+    # Index chunks into Hybrid Vector Store
     for chunk in parsed_chunks:
         vector_store.add_document(
             doc_id=f"{doc_id}_{chunk['chunk_id']}",
@@ -82,10 +78,63 @@ async def upload_document(
 
     total_pages = max(c["page"] for c in parsed_chunks)
 
-    # Initialize LangGraph State
     state = ComplianceAgentPodGraph.initialize_state(
         document_id=doc_id,
-        document_name=filename,
+        document_name=payload.filename or "contract.txt",
+        total_pages=total_pages,
+        raw_chunks=parsed_chunks
+    )
+    SESSION_STATES[doc_id] = state
+
+    return {
+        "document_id": doc_id,
+        "filename": payload.filename,
+        "total_pages": total_pages,
+        "chunks_indexed": len(parsed_chunks),
+        "trace_id": state["trace_id"]
+    }
+
+@router.post("/upload")
+async def upload_file(
+    file: Optional[UploadFile] = File(None),
+    text_content: Optional[str] = Form(None),
+    filename: Optional[str] = Form("uploaded_rfp.txt")
+):
+    doc_id = f"doc_{uuid.uuid4().hex[:8]}"
+    saved_path = os.path.join(settings.UPLOAD_DIR, f"{doc_id}_{filename}")
+
+    if file:
+        file_bytes = await file.read()
+        with open(saved_path, "wb") as f:
+            f.write(file_bytes)
+        parsed_chunks = DocumentParser.parse_file(saved_path)
+    elif text_content:
+        with open(saved_path, "w", encoding="utf-8") as f:
+            f.write(text_content)
+        parsed_chunks = DocumentParser.parse_file(saved_path)
+    else:
+        raise HTTPException(status_code=400, detail="Provide either a file or text content.")
+
+    if not parsed_chunks:
+        raise HTTPException(status_code=400, detail="Could not extract text chunks.")
+
+    for chunk in parsed_chunks:
+        vector_store.add_document(
+            doc_id=f"{doc_id}_{chunk['chunk_id']}",
+            text=chunk["text"],
+            metadata={
+                "type": "DOCUMENT",
+                "doc_id": doc_id,
+                "page": chunk["page"],
+                "chunk_id": chunk["chunk_id"]
+            }
+        )
+
+    total_pages = max(c["page"] for c in parsed_chunks)
+
+    state = ComplianceAgentPodGraph.initialize_state(
+        document_id=doc_id,
+        document_name=filename or "document.txt",
         total_pages=total_pages,
         raw_chunks=parsed_chunks
     )
@@ -100,17 +149,14 @@ async def upload_document(
     }
 
 @router.post("/run-audit/{doc_id}")
-def run_agentic_audit(doc_id: str):
+def run_audit(doc_id: str):
     if doc_id not in SESSION_STATES:
-        raise HTTPException(status_code=404, detail="Document ID not found in active session.")
+        raise HTTPException(status_code=404, detail="Document not found.")
 
     state = SESSION_STATES[doc_id]
-    
-    # Execute Multi-Agent Pod Graph
     updated_state = ComplianceAgentPodGraph.run_pipeline(state)
     SESSION_STATES[doc_id] = updated_state
 
-    # Fetch trace summary
     trace_info = telemetry_engine.get_trace_summary(updated_state["trace_id"])
 
     return {
@@ -126,10 +172,10 @@ def run_agentic_audit(doc_id: str):
     }
 
 @router.post("/human-decision")
-def submit_human_decision(payload: HumanDecisionPayload):
+def record_human_decision(payload: HumanDecisionPayload):
     doc_id = payload.document_id
     if doc_id not in SESSION_STATES:
-        raise HTTPException(status_code=404, detail="Document ID not found in active session.")
+        raise HTTPException(status_code=404, detail="Document not found.")
 
     state = SESSION_STATES[doc_id]
     updated_state = ComplianceAgentPodGraph.resume_with_human_decisions(state, payload.decisions)
@@ -147,19 +193,19 @@ def submit_human_decision(payload: HumanDecisionPayload):
     }
 
 @router.get("/telemetry")
-def get_global_telemetry():
+def get_telemetry():
     return telemetry_engine.get_global_metrics()
 
 @router.get("/export-report/{doc_id}")
-def export_audit_report(doc_id: str):
+def export_report(doc_id: str):
     if doc_id not in SESSION_STATES or not SESSION_STATES[doc_id].get("final_report"):
-        raise HTTPException(status_code=404, detail="No completed report found for this document.")
+        raise HTTPException(status_code=404, detail="Report not ready.")
 
     report = SESSION_STATES[doc_id]["final_report"]
     metrics = report.get("metrics", {})
 
     lines = [
-        f"# ENTERPRISE COMPLIANCE & RFP AUDIT REPORT",
+        "# ENTERPRISE COMPLIANCE & RFP AUDIT REPORT",
         f"**Target Document:** {report.get('document_name')}",
         f"**Audit Generated:** {report.get('audit_timestamp')}",
         f"**Overall Compliance Readiness:** {report.get('overall_readiness_score')}",
