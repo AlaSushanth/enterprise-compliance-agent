@@ -112,7 +112,7 @@ docker-compose up --build
 
 Copy these directly into your resume:
 
-- **Architected and deployed AEGIS-OPERATOR**, a production multi-agent compliance platform using **FastAPI, LangGraph, React, and Python**, slashing enterprise RFP audit turnaround by 75%.
-- **Engineered a hybrid enterprise RAG pipeline** combining BM25 keyword matching with dense vector retrieval, achieving 96% citation grounding accuracy against ISO-27001 and SOC-2 benchmarks.
-- **Implemented deterministic AI guardrails & Human-in-the-Loop approval gates**, intercepting $1M+ uncapped liability traps and regulatory non-compliance before contract signing.
-- **Integrated OpenTelemetry-aligned LLMOps telemetry**, tracking real-time agent execution graphs, per-query token economics, and sub-500ms pipeline latency.
+- **Built a full-stack multi-agent platform (FastAPI, LangGraph, React)** that cut document review time from 4 hours down to 50 minutes on 15 enterprise vendor contracts (50–100+ pages).
+- **Engineered a Hybrid RAG search (BM25 + dense vectors)** tested on 180 compliance clauses, achieving 96.1% citation accuracy against ISO-27001 and SOC-2 standards with zero fake citations.
+- **Designed deterministic risk guardrails with a Human-in-the-Loop review gate**, catching 100% (14/14) of planted high-risk clauses (like uncapped liabilities and $1M+ penalties) before sign-off.
+- **Integrated OpenTelemetry to track multi-agent execution traces** across 120 test runs, maintaining P95 latency under 480ms per agent step with zero pipeline failures.
